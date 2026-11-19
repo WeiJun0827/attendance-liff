@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>打卡</title>
+<style>
+  body { font-family: -apple-system, "Noto Sans TC", sans-serif; margin: 0;
+         display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; background: #f6f7f9; }
+  .card { background: #fff; border-radius: 16px; padding: 32px 24px; width: 88%;
+          max-width: 360px; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .big { font-size: 22px; font-weight: 700; margin: 12px 0; }
+  .sub { color: #666; font-size: 15px; line-height: 1.6; }
+  .err { color: #c0392b; }
+  .warn { color: #b9570a; font-size: 15px; line-height: 1.6; margin-top: 16px;
+          padding-top: 16px; border-top: 1px solid #eee; white-space: pre-line; }
+</style>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+<div class="card">
+  <div id="icon" style="font-size:40px">⏳</div>
+  <div class="big" id="title">處理中…</div>
+  <div class="sub" id="detail"></div>
+  <div class="warn" id="notice" hidden></div>
+</div>
+<script>
+  // Served from a static host, not Apps Script: inside HtmlService's iframe
+  // liff.init() never resolves (docs/2026-08-23-代打防偽調查.md).
+  var LIFF_ID = '2011210214-NWcJccll';
+  var EXEC_URL = 'https://script.google.com/macros/s/AKfycby-4L498wOTRUCyy2BfTlqQzWgDZmXmgWgZ3URVwIJgYJey5CiJpzWvqjo4jtILVJjk/exec';
+  var T0 = performance.now();
+  var IP_MS = null;
+  var GPS_MS = null;
+
+  // The rich menu opens liff.line.me/<id>?kind=上班. LINE first hands the query
+  // over inside liff.state, then liff.init() reloads with it in place.
+  function kindFromUrl() {
+    var p = new URLSearchParams(location.search);
+    var state = p.get('liff.state');
+    return p.get('kind') || (state ? new URLSearchParams(state.replace(/^[^?]*\?/, '')).get('kind') : null);
+  }
+  var KIND = kindFromUrl();
+  var FALLBACK = '請在聊天室輸入「' + (KIND || '上班') + '」，改用連結打卡。';
+
+  function render(icon, title, detail, isErr) {
+    document.getElementById('icon').textContent = icon;
+    document.getElementById('title').textContent = title;
+    var d = document.getElementById('detail');
+    d.textContent = detail;
+    d.className = isErr ? 'sub err' : 'sub';
+  }
+
+  // Every wait has its own timeout: a promise that never settles would leave
+  // the person on 處理中… with no way to punch.
+  function within(ms, p) {
+    return Promise.race([p, new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('timeout')); }, ms);
+    })]);
+  }
+
+  // text/plain keeps this a simple request, so there is no CORS preflight,
+  // which Apps Script cannot answer.
+  function post(body) {
+    return within(30000, fetch(EXEC_URL, { method: 'POST', body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); }));
+  }
+
+  function locate() {
+    if (!navigator.geolocation) return Promise.resolve(null);
+    var g0 = performance.now();
+    return new Promise(function (resolve) {
+      var done = function (pos) { GPS_MS = Math.round(performance.now() - g0); resolve(pos); };
+      navigator.geolocation.getCurrentPosition(done, function () { done(null); },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+    });
+  }
+
+  function showNotice(idToken) {
+    post({ type: 'liffNotice', idToken: idToken }).then(function (r) {
+      if (!r.notice) return;
+      var n = document.getElementById('notice');
+      n.textContent = '⚠️ ' + r.notice;
+      n.hidden = false;
+    }).catch(function () {});
+  }
+
+  var ip = within(3000, fetch('https://api.ipify.org?format=json').then(function (r) { return r.json(); }))
+    .then(function (j) { IP_MS = Math.round(performance.now() - T0); return j.ip || ''; })
+    .catch(function () { return ''; });
+
+  Promise.all([within(10000, liff.init({ liffId: LIFF_ID })), ip])
+    .then(function (got) {
+      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
+      var idToken = liff.getIDToken();
+      if (!idToken) throw new Error('no id token');
+      var req = { type: 'liffPunch', idToken: idToken, kind: KIND, ip: got[1],
+                  lat: null, lng: null, acc: null, ipMs: IP_MS, gpsMs: null, gpsTried: false };
+      return post(req).then(function (r) {
+        if (!r.needLocation) return r;
+        return locate().then(function (pos) {
+          return post(Object.assign(req, {
+            gpsTried: true, gpsMs: GPS_MS,
+            lat: pos ? pos.coords.latitude : null,
+            lng: pos ? pos.coords.longitude : null,
+            acc: pos ? Math.round(pos.coords.accuracy) : null
+          }));
+        });
+      }).then(function (r) {
+        if (!r.ok) { render('⚠️', r.message, '', true); return; }
+        render('✅', r.message, '', false);
+        showNotice(idToken);
+      });
+    })
+    .catch(function () { render('⚠️', '無法完成打卡', FALLBACK, true); });
+</script>
+</body>
+</html>
