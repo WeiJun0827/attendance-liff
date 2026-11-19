@@ -95,9 +95,15 @@
 
   // A mis-tapped menu button must write nothing, so the punch waits for this
   // tap. Identity and IP are fetched meanwhile, so the tap costs one request.
-  function confirmTap() {
+  var EMOJI = {
+    '早上班': '🌅', '午上班': '🏙️', '晚上班': '🌃',
+    '早下班': '🍱', '午下班': '☕', '晚下班': '🏠'
+  };
+
+  function confirmTap(session) {
     var hm = new Date().toTimeString().slice(0, 5);
-    render(KIND === '上班' ? '🏥' : '🏠', '確認' + KIND + '打卡？', '現在時間 ' + hm, false);
+    render(EMOJI[session + KIND] || '⏰', '確認' + (session ? session + '診' : '') + KIND + '打卡？',
+      '現在時間 ' + hm, false);
     var go = document.getElementById('go');
     go.textContent = KIND + '打卡';
     go.hidden = false;
@@ -116,19 +122,26 @@
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
       var idToken = liff.getIDToken();
       if (!idToken) throw new Error('no id token');
-      var req = { type: 'liffPunch', idToken: idToken, kind: KIND, ip: got[1],
-                  lat: null, lng: null, acc: null, ipMs: IP_MS, gpsMs: null, gpsTried: false };
-      return confirmTap().then(function () { return post(req); }).then(function (r) {
-        if (!r.needLocation) return r;
-        return locate().then(function (pos) {
-          return post(Object.assign(req, {
-            gpsTried: true, gpsMs: GPS_MS,
-            lat: pos ? pos.coords.latitude : null,
-            lng: pos ? pos.coords.longitude : null,
-            acc: pos ? Math.round(pos.coords.accuracy) : null
-          }));
+      var req = { type: 'liffPrepare', idToken: idToken, kind: KIND, ip: got[1],
+                  lat: null, lng: null, acc: null, ipMs: IP_MS, gpsMs: null, gpsTried: true };
+      // Identity, the window and duplicate checks, and GPS are all settled
+      // here, before the button shows, so the tap waits only for the write.
+      return post(req).then(function (p) {
+        if (!p.ok) { render('⚠️', p.message, '', true); return null; }
+        req.type = 'liffPunch';
+        req.ticket = p.ticket;
+        var located = !p.needLocation ? Promise.resolve() : locate().then(function (pos) {
+          req.gpsMs = GPS_MS;
+          if (pos) {
+            req.lat = pos.coords.latitude;
+            req.lng = pos.coords.longitude;
+            req.acc = Math.round(pos.coords.accuracy);
+          }
         });
+        return located.then(function () { return confirmTap(p.session || ''); })
+          .then(function () { return post(req); });
       }).then(function (r) {
+        if (r === null) return;
         if (!r.ok) { render('⚠️', r.message, '', true); return; }
         render('✅', r.message, '', false);
         showNotice(idToken);
