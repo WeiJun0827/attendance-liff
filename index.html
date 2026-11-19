@@ -15,6 +15,8 @@
   .err { color: #c0392b; }
   .warn { color: #b9570a; font-size: 15px; line-height: 1.6; margin-top: 16px;
           padding-top: 16px; border-top: 1px solid #eee; white-space: pre-line; }
+  #go { margin-top: 20px; width: 100%; padding: 16px; border: 0; border-radius: 12px;
+        background: #06c755; color: #fff; font-size: 20px; font-weight: 700; }
 </style>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
@@ -23,6 +25,7 @@
   <div id="icon" style="font-size:40px">⏳</div>
   <div class="big" id="title">處理中…</div>
   <div class="sub" id="detail"></div>
+  <button type="button" id="go" hidden></button>
   <div class="warn" id="notice" hidden></div>
 </div>
 <script>
@@ -90,14 +93,32 @@
     .then(function (j) { IP_MS = Math.round(performance.now() - T0); return j.ip || ''; })
     .catch(function () { return ''; });
 
-  Promise.all([within(10000, liff.init({ liffId: LIFF_ID })), ip])
+  // A mis-tapped menu button must write nothing, so the punch waits for this
+  // tap. Identity and IP are fetched meanwhile, so the tap costs one request.
+  function confirmTap() {
+    var hm = new Date().toTimeString().slice(0, 5);
+    render(KIND === '上班' ? '🏥' : '🏠', '確認' + KIND + '打卡？', '現在時間 ' + hm, false);
+    var go = document.getElementById('go');
+    go.textContent = KIND + '打卡';
+    go.hidden = false;
+    return new Promise(function (resolve) {
+      go.onclick = function () {
+        go.hidden = true;
+        render('⏳', '處理中…', '', false);
+        resolve();
+      };
+    });
+  }
+
+  if (KIND !== '上班' && KIND !== '下班') render('⚠️', '無法完成打卡', FALLBACK, true);
+  else Promise.all([within(10000, liff.init({ liffId: LIFF_ID })), ip])
     .then(function (got) {
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
       var idToken = liff.getIDToken();
       if (!idToken) throw new Error('no id token');
       var req = { type: 'liffPunch', idToken: idToken, kind: KIND, ip: got[1],
                   lat: null, lng: null, acc: null, ipMs: IP_MS, gpsMs: null, gpsTried: false };
-      return post(req).then(function (r) {
+      return confirmTap().then(function () { return post(req); }).then(function (r) {
         if (!r.needLocation) return r;
         return locate().then(function (pos) {
           return post(Object.assign(req, {
