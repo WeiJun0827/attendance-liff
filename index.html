@@ -37,14 +37,16 @@
   var IP_MS = null;
   var GPS_MS = null;
 
-  // The rich menu opens liff.line.me/<id>?kind=上班. LINE first hands the query
-  // over inside liff.state, then liff.init() reloads with it in place.
-  function kindFromUrl() {
+  // The rich menu opens liff.line.me/<id>?kind=上班 or ?view=statement. LINE
+  // first hands the query over inside liff.state, then liff.init() reloads with
+  // it in place.
+  function fromUrl(name) {
     var p = new URLSearchParams(location.search);
     var state = p.get('liff.state');
-    return p.get('kind') || (state ? new URLSearchParams(state.replace(/^[^?]*\?/, '')).get('kind') : null);
+    return p.get(name) || (state ? new URLSearchParams(state.replace(/^[^?]*\?/, '')).get(name) : null);
   }
-  var KIND = kindFromUrl();
+  var KIND = fromUrl('kind');
+  var VIEW = fromUrl('view');
   var FALLBACK = '請在聊天室輸入「' + (KIND || '上班') + '」，改用連結打卡。';
 
   function render(icon, title, detail, isErr) {
@@ -89,9 +91,11 @@
     }).catch(function () {});
   }
 
-  var ip = within(3000, fetch('https://api.ipify.org?format=json').then(function (r) { return r.json(); }))
-    .then(function (j) { IP_MS = Math.round(performance.now() - T0); return j.ip || ''; })
-    .catch(function () { return ''; });
+  function egressIp() {
+    return within(3000, fetch('https://api.ipify.org?format=json').then(function (r) { return r.json(); }))
+      .then(function (j) { IP_MS = Math.round(performance.now() - T0); return j.ip || ''; })
+      .catch(function () { return ''; });
+  }
 
   // A mis-tapped menu button must write nothing, so the punch waits for this
   // tap. Identity and IP are fetched meanwhile, so the tap costs one request.
@@ -116,8 +120,30 @@
     });
   }
 
-  if (KIND !== '上班' && KIND !== '下班') render('⚠️', '無法完成打卡', FALLBACK, true);
-  else Promise.all([within(10000, liff.init({ liffId: LIFF_ID })), ip])
+  // The server returns the same page the ?key= link serves, whole; writing it
+  // over this one runs its own script, so the two never drift apart.
+  function openStatement() {
+    var failed = '請在聊天室輸入「查詢出勤」，改用連結查詢。';
+    document.title = '出勤紀錄';
+    render('⏳', '載入中…', '', false);
+    within(10000, liff.init({ liffId: LIFF_ID }))
+      .then(function () {
+        if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
+        var idToken = liff.getIDToken();
+        if (!idToken) throw new Error('no id token');
+        return post({ type: 'liffStatement', idToken: idToken }).then(function (r) {
+          if (!r.ok) { render('⚠️', r.message, '', true); return; }
+          document.open();
+          document.write(r.html);
+          document.close();
+        });
+      })
+      .catch(function () { render('⚠️', '無法載入出勤紀錄', failed, true); });
+  }
+
+  if (VIEW === 'statement') openStatement();
+  else if (KIND !== '上班' && KIND !== '下班') render('⚠️', '無法完成打卡', FALLBACK, true);
+  else Promise.all([within(10000, liff.init({ liffId: LIFF_ID })), egressIp()])
     .then(function (got) {
       if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return null; }
       var idToken = liff.getIDToken();
