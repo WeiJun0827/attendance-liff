@@ -218,11 +218,23 @@
       msg.className = isErr ? 'msg err' : 'msg';
     }
 
-    btn.onclick = function () {
-      if (!date.value) date.value = ymd(new Date());
+    function open(fix) {
+      if (fix) {
+        date.value = fix.getAttribute('data-fix-date');
+        document.getElementById('fixtime').value = fix.getAttribute('data-fix-time');
+        form.querySelector('input[name=fixkind][value=' + fix.getAttribute('data-fix-kind') + ']').checked = true;
+      } else if (!date.value) date.value = ymd(new Date());
       say('送出後要等管理員審核，才會計入出勤。', false);
       sheet.hidden = false;
-    };
+    }
+    btn.onclick = function () { open(null); };
+    // Capture phase, so a ？ opens the form and its own onclick never shows the note.
+    document.addEventListener('click', function (e) {
+      var fix = e.target.closest && e.target.closest('[data-fix-kind]');
+      if (!fix) return;
+      e.stopPropagation();
+      open(fix);
+    }, true);
     document.getElementById('fixcancel').onclick = function () { sheet.hidden = true; };
     form.onsubmit = function (e) {
       e.preventDefault();
