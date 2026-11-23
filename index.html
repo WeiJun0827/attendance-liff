@@ -165,6 +165,7 @@
     + '#fixsheet label{display:block;font-size:14px;color:#666;margin:12px 0 6px}'
     + '#fixsheet input[type=date],#fixsheet input[type=time],#fixsheet input[type=text]{width:100%;box-sizing:border-box;'
     + 'font-size:16px;padding:10px;border:1px solid #d8dbe0;border-radius:10px}'
+    + '#fixsheet #fixap{color:#06c755;margin-left:6px}'
     + '#fixsheet .kind{display:flex;gap:8px}'
     + '#fixsheet .kind label{flex:1;margin:0;text-align:center;border:1px solid #d8dbe0;border-radius:10px;padding:10px;color:#222;font-size:16px}'
     + '#fixsheet .kind input{margin-right:6px}'
@@ -194,11 +195,11 @@
     sheet.hidden = true;
     sheet.innerHTML = '<form><h2>申請補簽</h2>'
       + '<label for="fixdate">日期</label><input type="date" id="fixdate" required>'
-      + '<label for="fixtime">時間</label><input type="time" id="fixtime" required>'
+      + '<label for="fixtime">時間 <b id="fixap"></b></label><input type="time" id="fixtime" required>'
       + '<label>上班或下班</label><div class="kind">'
       + '<label><input type="radio" name="fixkind" value="上班" required>上班</label>'
       + '<label><input type="radio" name="fixkind" value="下班">下班</label></div>'
-      + '<label for="fixreason">事由（可不填）</label><input type="text" id="fixreason" maxlength="100">'
+      + '<label for="fixreason">事由</label><input type="text" id="fixreason" maxlength="100" required placeholder="例：忘記打卡">'
       + '<div class="msg" id="fixmsg">送出後要等管理員審核，才會計入出勤。</div>'
       + '<div class="row"><button type="button" id="fixcancel">取消</button>'
       + '<button type="submit" id="fixsend">送出</button></div></form>';
@@ -213,6 +214,15 @@
     date.min = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1));
     date.max = ymd(now);
 
+    // The control shows the phone's own 12/24-hour style; this names the half of the day either way.
+    var tm = document.getElementById('fixtime');
+    function ampm() {
+      var h = parseInt(tm.value, 10);
+      document.getElementById('fixap').textContent = isNaN(h) ? '' : h < 12 ? '上午' : '下午';
+    }
+    tm.addEventListener('input', ampm);
+    tm.addEventListener('change', ampm);
+
     function say(text, isErr) {
       msg.textContent = text;
       msg.className = isErr ? 'msg err' : 'msg';
@@ -221,7 +231,8 @@
     function open(fix) {
       if (fix) {
         date.value = fix.getAttribute('data-fix-date');
-        document.getElementById('fixtime').value = fix.getAttribute('data-fix-time');
+        tm.value = fix.getAttribute('data-fix-time');
+        ampm();
         form.querySelector('input[name=fixkind][value=' + fix.getAttribute('data-fix-kind') + ']').checked = true;
       } else if (!date.value) date.value = ymd(new Date());
       say('送出後要等管理員審核，才會計入出勤。', false);
@@ -247,7 +258,7 @@
         kind: kind ? kind.value : '', reason: document.getElementById('fixreason').value
       }).then(function (r) {
         say(r.message, !r.ok);
-        if (r.ok) form.reset();
+        if (r.ok) { form.reset(); ampm(); }
       }).catch(function () {
         say('補簽沒有送出成功，請在聊天室輸入「/補簽」改用指令申請。', true);
       }).then(function () { send.disabled = false; });
