@@ -120,6 +120,19 @@
     });
   }
 
+  // While this page is still parsing, document.open() is ignored and write()
+  // inserts into it instead of replacing it.
+  function replacePage(html, then) {
+    var go = function () {
+      document.open();
+      document.write(html);
+      document.close();
+      then();
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+    else go();
+  }
+
   // The server returns the same page the ?key= link serves, whole; writing it
   // over this one runs its own script, so the two never drift apart.
   function openStatement() {
@@ -133,12 +146,100 @@
         if (!idToken) throw new Error('no id token');
         return post({ type: 'liffStatement', idToken: idToken }).then(function (r) {
           if (!r.ok) { render('⚠️', r.message, '', true); return; }
-          document.open();
-          document.write(r.html);
-          document.close();
+          replacePage(r.html, function () { addCorrectionForm(idToken); });
         });
       })
       .catch(function () { render('⚠️', '無法載入出勤紀錄', failed, true); });
+  }
+
+  // LIFF only: the ?key= page has no LINE identity to file a 補簽 under. The
+  // server files it for the token's owner, whichever person is on screen.
+  var SHEET_CSS = '#fixbtn{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:1;'
+    + 'border:0;border-radius:999px;padding:13px 20px;background:#06c755;color:#fff;font-size:16px;font-weight:700;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.2)}'
+    + '#fixsheet{position:fixed;inset:0;z-index:3;background:rgba(0,0,0,.35);display:flex;align-items:flex-end}'
+    + '#fixsheet[hidden]{display:none}'
+    + '#fixsheet form{background:#fff;width:100%;max-width:560px;margin:0 auto;border-radius:16px 16px 0 0;'
+    + 'padding:20px 16px calc(20px + env(safe-area-inset-bottom));box-sizing:border-box}'
+    + '#fixsheet h2{font-size:18px;margin:0 0 14px}'
+    + '#fixsheet label{display:block;font-size:14px;color:#666;margin:12px 0 6px}'
+    + '#fixsheet input[type=date],#fixsheet input[type=time],#fixsheet input[type=text]{width:100%;box-sizing:border-box;'
+    + 'font-size:16px;padding:10px;border:1px solid #d8dbe0;border-radius:10px}'
+    + '#fixsheet .kind{display:flex;gap:8px}'
+    + '#fixsheet .kind label{flex:1;margin:0;text-align:center;border:1px solid #d8dbe0;border-radius:10px;padding:10px;color:#222;font-size:16px}'
+    + '#fixsheet .kind input{margin-right:6px}'
+    + '#fixsheet .msg{font-size:14px;line-height:1.6;margin-top:14px;white-space:pre-line}'
+    + '#fixsheet .msg.err{color:#c0392b}'
+    + '#fixsheet .row{display:flex;gap:8px;margin-top:16px}'
+    + '#fixsheet .row button{flex:1;font-size:16px;padding:13px;border-radius:12px;border:1px solid #d8dbe0;background:#f6f7f9}'
+    + '#fixsheet .row button[type=submit]{border:0;background:#06c755;color:#fff;font-weight:700}';
+
+  function ymd(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function addCorrectionForm(idToken) {
+    var style = document.createElement('style');
+    style.textContent = SHEET_CSS;
+    document.head.appendChild(style);
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'fixbtn';
+    btn.textContent = '申請補簽';
+    document.body.appendChild(btn);
+
+    var sheet = document.createElement('div');
+    sheet.id = 'fixsheet';
+    sheet.hidden = true;
+    sheet.innerHTML = '<form><h2>申請補簽</h2>'
+      + '<label for="fixdate">日期</label><input type="date" id="fixdate" required>'
+      + '<label for="fixtime">時間</label><input type="time" id="fixtime" required>'
+      + '<label>上班或下班</label><div class="kind">'
+      + '<label><input type="radio" name="fixkind" value="上班" required>上班</label>'
+      + '<label><input type="radio" name="fixkind" value="下班">下班</label></div>'
+      + '<label for="fixreason">事由（可不填）</label><input type="text" id="fixreason" maxlength="100">'
+      + '<div class="msg" id="fixmsg">送出後要等管理員審核，才會計入出勤。</div>'
+      + '<div class="row"><button type="button" id="fixcancel">取消</button>'
+      + '<button type="submit" id="fixsend">送出</button></div></form>';
+    document.body.appendChild(sheet);
+
+    var form = sheet.querySelector('form');
+    var date = document.getElementById('fixdate');
+    var msg = document.getElementById('fixmsg');
+    var send = document.getElementById('fixsend');
+    var now = new Date();
+    // This month and last month only: the server refuses anything older.
+    date.min = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+    date.max = ymd(now);
+
+    function say(text, isErr) {
+      msg.textContent = text;
+      msg.className = isErr ? 'msg err' : 'msg';
+    }
+
+    btn.onclick = function () {
+      if (!date.value) date.value = ymd(new Date());
+      say('送出後要等管理員審核，才會計入出勤。', false);
+      sheet.hidden = false;
+    };
+    document.getElementById('fixcancel').onclick = function () { sheet.hidden = true; };
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var kind = form.querySelector('input[name=fixkind]:checked');
+      send.disabled = true;
+      say('送出中…', false);
+      post({
+        type: 'liffCorrection', idToken: liff.getIDToken() || idToken,
+        date: date.value, time: document.getElementById('fixtime').value,
+        kind: kind ? kind.value : '', reason: document.getElementById('fixreason').value
+      }).then(function (r) {
+        say(r.message, !r.ok);
+        if (r.ok) form.reset();
+      }).catch(function () {
+        say('補簽沒有送出成功，請在聊天室輸入「/補簽」改用指令申請。', true);
+      }).then(function () { send.disabled = false; });
+    };
   }
 
   if (VIEW === 'statement') openStatement();
